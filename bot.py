@@ -18,7 +18,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ---------- 日志 ----------
+# ---------- 日志 o----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
