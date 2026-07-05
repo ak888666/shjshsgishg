@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-import os
 import logging
-import json
 import re
 import base64
 import time
@@ -18,14 +16,17 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ---------- 日志 o----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- 状态常量 ----------
-NAME, IDCARD, PHONE, WAIT_SMS = range(4)
+# ========== 硬编码你的 Bot Token（替换下面内容） ==========
+BOT_TOKEN = "8751644845:AAFiFgl6Qub_JFUnx7vW66DYP65qbRLOVVA"   # ← 替换为 @BotFather 给你的真实 Token
+# =========================================================
 
-# ---------- 导入 ddddocr ----------
+# ---------- 状态常量 ----------
+PHONE, WAIT_SMS = range(2)
+
+# ---------- ddddocr ----------
 try:
     import ddddocr
     ocr = ddddocr.DdddOcr(show_ad=False)
@@ -33,7 +34,7 @@ except ImportError:
     logger.error("请安装 ddddocr: pip install ddddocr")
     ocr = None
 
-# ---------- SM4 加密 ----------
+# ---------- SM4 加密（完整） ----------
 SM4_KEY = "CatsPK0WWWRRhjkw"
 SboxTable = [
     0xd6, 0x90, 0xe9, 0xfe, 0xcc, 0xe1, 0x3d, 0xb7, 0x16, 0xb6, 0x14, 0xc2, 0x28, 0xfb, 0x2c, 0x05,
@@ -126,7 +127,7 @@ def sm4_encrypt_ecb(plain_text: str) -> str:
 
 # ---------- 全局配置 ----------
 BASE_URL = "http://www.gxdlys.com"
-PASSWORD = "268428."  # 固定密码
+PASSWORD = "268428."
 session = requests.Session()
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 14; Build/BP2A.250605.031.A3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.119 Mobile Safari/537.36",
@@ -138,9 +139,8 @@ HEADERS = {
     "Referer": "http://www.gxdlys.com/Wechat/User/Regist",
 }
 
-# ==================== 工具函数 ====================
+# ---------- 工具函数 ----------
 def get_captcha() -> tuple:
-    """获取图形验证码并识别，返回 (code, uuid)"""
     try:
         url = f"{BASE_URL}/Wechat/FaceDetect/GetVerifyCode"
         resp = session.get(url, headers=HEADERS, timeout=10)
@@ -158,7 +158,7 @@ def get_captcha() -> tuple:
             code = ocr.classification(img_bytes)
             if code:
                 code = re.sub(r'[^A-Z0-9]', '', code.upper())
-                if len(code) == 4:   # 验证码通常4位
+                if len(code) == 4:
                     return code, uuid
         return None, None
     except Exception as e:
@@ -166,7 +166,6 @@ def get_captcha() -> tuple:
         return None, None
 
 def send_sms(phone: str, captcha_code: str, uuid: str) -> bool:
-    """请求发送短信验证码"""
     data = {
         "phoneId": phone,
         "type": "10001",
@@ -190,7 +189,6 @@ def send_sms(phone: str, captcha_code: str, uuid: str) -> bool:
         return False
 
 def register(phone: str, sms_code: str, captcha_code: str, real_name: str, id_card: str) -> bool:
-    """提交注册"""
     data = {
         "zipArea": "",
         "userType": "-1",
@@ -225,7 +223,6 @@ def register(phone: str, sms_code: str, captcha_code: str, real_name: str, id_ca
         return False
 
 def login(id_card: str) -> bool:
-    """登录"""
     encrypted_login_raw = sm4_encrypt_ecb(id_card)
     encrypted_pwd_raw = sm4_encrypt_ecb(PASSWORD)
     encrypted_login = urllib.parse.quote(encrypted_login_raw)
@@ -253,7 +250,6 @@ def login(id_card: str) -> bool:
         return False
 
 def query_id_photo(name: str, id_card: str) -> Dict[str, Any]:
-    """查询身份证照片信息"""
     encoded_name = urllib.parse.quote(name)
     url = f"{BASE_URL}/Wechat/FaceDetect/GetGAIDCardPhotoNew?idCard={id_card}&name={encoded_name}"
     query_headers = {
@@ -271,7 +267,6 @@ def query_id_photo(name: str, id_card: str) -> Dict[str, Any]:
         return {}
 
 def download_photo(file_id: str) -> bytes:
-    """下载照片二进制数据"""
     url = f"{BASE_URL}/System/FileService/ShowFile?fileId={file_id}"
     try:
         r = session.get(url, timeout=60)
@@ -282,25 +277,27 @@ def download_photo(file_id: str) -> bytes:
         logger.error(f"下载照片异常: {e}")
         return None
 
-# ==================== Telegram Bot 处理函数 ====================
+# ---------- Bot 处理函数 ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 欢迎使用证件查询助手！\n请先输入您的 **姓名**："
+        "👋 欢迎！\n使用 /gx 姓名 身份证号 开始查询。\n例如：/gx 张三 450821199306204912"
     )
-    return NAME
+    return ConversationHandler.END
 
-async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['real_name'] = update.message.text.strip()
-    await update.message.reply_text("📇 请输入您的 **身份证号**：")
-    return IDCARD
-
-async def get_idcard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    id_card = update.message.text.strip()
+async def gx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    match = re.match(r'/gx\s+(\S+)\s+(\S+)', text)
+    if not match:
+        await update.message.reply_text("❌ 格式错误，请使用：/gx 姓名 身份证号")
+        return ConversationHandler.END
+    real_name = match.group(1).strip()
+    id_card = match.group(2).strip()
     if not re.match(r'^\d{17}[\dXx]$', id_card):
-        await update.message.reply_text("❌ 身份证号格式不正确，请重新输入（18位数字或末尾X）：")
-        return IDCARD
+        await update.message.reply_text("❌ 身份证号格式不正确（18位数字或末尾X）")
+        return ConversationHandler.END
+    context.user_data['real_name'] = real_name
     context.user_data['id_card'] = id_card.upper()
-    await update.message.reply_text("📱 请输入您的 **手机号**：")
+    await update.message.reply_text("📱 请发送您的手机号（11位数字）：")
     return PHONE
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -316,8 +313,8 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ 获取验证码失败，请稍后重试。")
         return ConversationHandler.END
 
-    context.user_data['uuid'] = uuid
     context.user_data['captcha_code'] = captcha_code
+    context.user_data['uuid'] = uuid
     await update.message.reply_text(f"✅ 图形验证码已识别：`{captcha_code}`")
 
     await update.message.reply_text("📤 正在发送短信验证码...")
@@ -390,30 +387,25 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚫 操作已取消。")
     return ConversationHandler.END
 
-# ==================== 主函数 ====================
+# ---------- 主函数 ----------
 def main():
-    # 🔑 在这里直接填入你的 Bot Token（从 @BotFather 获取）
-    BOT_TOKEN = "8751644845:AAFiFgl6Qub_JFUnx7vW66DYP65qbRLOVVA"   # ← 请替换为实际 Token
-
-    if not BOT_TOKEN or BOT_TOKEN == "你的BOT_TOKEN":
-        logger.error("请先在代码中填入正确的 BOT_TOKEN")
+    if not BOT_TOKEN or BOT_TOKEN == "你的BotToken":
+        logger.error("请先修改 bot.py 中的 BOT_TOKEN 变量")
         return
 
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[CommandHandler("gx", gx_command)],
         states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            IDCARD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_idcard)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
             WAIT_SMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_sms_code)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-
     app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("help", lambda u,c: u.message.reply_text("使用 /start 开始注册流程。")))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", lambda u,c: u.message.reply_text("使用 /gx 姓名 身份证号")))
 
     logger.info("Bot 启动...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
